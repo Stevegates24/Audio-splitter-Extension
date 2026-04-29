@@ -1,1 +1,1337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dual Audio Mixer — Chrome Extension</title>
+<meta name="description" content="Route browser audio to multiple outputs simultaneously. Full EQ, spatial effects, and 8D audio for Chromebook.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:ital,wght@0,300;0,400;1,300&display=swap" rel="stylesheet">
+
+<style>
+/* ─── Reset ─── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+
+/* ─── Tokens ─── */
+:root {
+  --bg:     #06040f;
+  --bg1:    #0b0818;
+  --bg2:    #100d22;
+  --p:      #a78bfa;
+  --p2:     #7c3aed;
+  --p3:     #4c1d95;
+  --ind:    #818cf8;
+  --pink:   #f472b6;
+  --grn:    #34d399;
+  --txt:    #f0ebff;
+  --txt2:   rgba(240,235,255,0.55);
+  --txt3:   rgba(240,235,255,0.25);
+  --bdr:    rgba(167,139,250,0.12);
+  --bdr2:   rgba(167,139,250,0.25);
+  --sur:    rgba(255,255,255,0.03);
+  --sur2:   rgba(255,255,255,0.055);
+}
+
+body {
+  font-family: 'Syne', sans-serif;
+  background: var(--bg);
+  color: var(--txt);
+  min-height: 100vh;
+  overflow-x: hidden;
+  cursor: none;
+}
+
+/* ─── Custom cursor ─── */
+#cursor {
+  position: fixed; top: 0; left: 0; z-index: 9999;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--p);
+  pointer-events: none;
+  transform: translate(-50%,-50%);
+  transition: transform 0.08s, width 0.2s, height 0.2s, opacity 0.2s;
+  mix-blend-mode: screen;
+}
+#cursor-ring {
+  position: fixed; top: 0; left: 0; z-index: 9998;
+  width: 36px; height: 36px; border-radius: 50%;
+  border: 1px solid rgba(167,139,250,0.4);
+  pointer-events: none;
+  transform: translate(-50%,-50%);
+  transition: transform 0.18s cubic-bezier(0.23,1,0.32,1), width 0.3s, height 0.3s, opacity 0.3s;
+}
+body:has(a:hover) #cursor, body:has(button:hover) #cursor { width: 20px; height: 20px; }
+
+/* ─── Noise overlay ─── */
+body::before {
+  content: '';
+  position: fixed; inset: 0; z-index: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+  opacity: 0.022;
+  pointer-events: none;
+}
+
+/* ─── Mesh gradient bg ─── */
+.mesh {
+  position: fixed; inset: 0; z-index: 0;
+  background:
+    radial-gradient(ellipse 60% 50% at 20% 10%, rgba(109,40,217,0.18) 0%, transparent 60%),
+    radial-gradient(ellipse 40% 40% at 80% 80%, rgba(244,114,182,0.08) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 60% at 60% 30%, rgba(129,140,248,0.07) 0%, transparent 60%);
+  pointer-events: none;
+  animation: mesh-shift 20s ease-in-out infinite alternate;
+}
+@keyframes mesh-shift {
+  0%   { opacity: 1; transform: scale(1) rotate(0deg); }
+  100% { opacity: 0.85; transform: scale(1.08) rotate(2deg); }
+}
+
+/* ─── Section wrapper ─── */
+section { position: relative; z-index: 1; }
+
+/* ═══════════════════════════════════════
+   NAV
+═══════════════════════════════════════ */
+nav {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 20px 60px;
+  border-bottom: 1px solid transparent;
+  transition: background 0.4s, border-color 0.4s, padding 0.3s;
+}
+nav.scrolled {
+  background: rgba(6,4,15,0.85);
+  backdrop-filter: blur(20px);
+  border-color: var(--bdr);
+  padding: 14px 60px;
+}
+
+.nav-logo {
+  display: flex; align-items: center; gap: 10px;
+  text-decoration: none; color: inherit;
+}
+.nav-logo svg { width: 30px; height: 30px; }
+.nav-logo-text { font-size: 15px; font-weight: 700; letter-spacing: -0.3px; }
+
+.nav-links { display: flex; gap: 36px; list-style: none; }
+.nav-links a {
+  font-size: 13px; font-weight: 600; color: var(--txt2); text-decoration: none;
+  letter-spacing: 0.3px; transition: color 0.2s;
+}
+.nav-links a:hover { color: var(--txt); }
+
+.nav-cta {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 20px; border-radius: 100px;
+  background: linear-gradient(135deg, var(--p2), var(--p3));
+  color: #ede9fe; font-size: 13px; font-weight: 700;
+  text-decoration: none; letter-spacing: 0.2px;
+  border: 1px solid rgba(167,139,250,0.3);
+  transition: all 0.2s;
+  box-shadow: 0 0 20px rgba(109,40,217,0.3);
+}
+.nav-cta:hover { transform: translateY(-1px); box-shadow: 0 4px 24px rgba(109,40,217,0.5); }
+
+/* ═══════════════════════════════════════
+   HERO
+═══════════════════════════════════════ */
+.hero {
+  min-height: 100vh;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center;
+  padding: 120px 24px 80px;
+  position: relative;
+}
+
+/* Animated waveform behind hero text */
+.hero-waveform {
+  position: absolute; bottom: 0; left: 0; right: 0; height: 220px;
+  overflow: hidden; pointer-events: none;
+}
+.hero-waveform canvas { width: 100%; height: 100%; }
+
+.hero-eyebrow {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 14px; border-radius: 100px;
+  background: rgba(167,139,250,0.08);
+  border: 1px solid var(--bdr2);
+  font-family: 'DM Mono', monospace;
+  font-size: 11px; font-weight: 400; color: var(--p);
+  letter-spacing: 0.8px; text-transform: uppercase;
+  margin-bottom: 32px;
+  opacity: 0; transform: translateY(20px);
+  animation: reveal 0.7s ease 0.2s forwards;
+}
+.hero-eyebrow-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--p);
+  animation: blink 2s ease-in-out infinite;
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+h1 {
+  font-size: clamp(52px, 9vw, 110px);
+  font-weight: 800;
+  letter-spacing: -3px;
+  line-height: 0.92;
+  margin-bottom: 28px;
+  opacity: 0; transform: translateY(30px);
+  animation: reveal 0.8s ease 0.35s forwards;
+}
+h1 .line2 {
+  display: block;
+  background: linear-gradient(135deg, var(--p) 0%, var(--ind) 40%, var(--pink) 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+}
+
+.hero-sub {
+  max-width: 540px;
+  font-size: 17px; font-weight: 400; color: var(--txt2); line-height: 1.65;
+  margin-bottom: 48px;
+  font-family: 'DM Mono', monospace; font-style: italic;
+  opacity: 0; transform: translateY(20px);
+  animation: reveal 0.7s ease 0.55s forwards;
+}
+
+.hero-actions {
+  display: flex; gap: 14px; align-items: center; flex-wrap: wrap; justify-content: center;
+  opacity: 0; transform: translateY(20px);
+  animation: reveal 0.7s ease 0.7s forwards;
+}
+
+.btn-primary {
+  display: inline-flex; align-items: center; gap: 9px;
+  padding: 14px 28px; border-radius: 100px;
+  background: linear-gradient(135deg, #7c3aed, #6d28d9);
+  color: #ede9fe; font-size: 14px; font-weight: 700; text-decoration: none;
+  border: 1px solid rgba(167,139,250,0.35);
+  box-shadow: 0 0 30px rgba(109,40,217,0.35), inset 0 1px 0 rgba(255,255,255,0.15);
+  transition: all 0.25s;
+  position: relative; overflow: hidden;
+}
+.btn-primary::after {
+  content: ''; position: absolute; top: 0; left: -100%; width: 60%; height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent);
+}
+.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 32px rgba(109,40,217,0.5); }
+.btn-primary:hover::after { left: 150%; transition: left 0.5s ease; }
+
+.btn-ghost {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 14px 28px; border-radius: 100px;
+  background: var(--sur2); color: var(--txt2);
+  font-size: 14px; font-weight: 600; text-decoration: none;
+  border: 1px solid var(--bdr);
+  transition: all 0.2s;
+}
+.btn-ghost:hover { background: rgba(255,255,255,0.07); color: var(--txt); border-color: var(--bdr2); }
+
+.hero-stats {
+  display: flex; gap: 40px; margin-top: 72px;
+  opacity: 0; transform: translateY(20px);
+  animation: reveal 0.7s ease 0.9s forwards;
+}
+.stat { text-align: center; }
+.stat-num { font-size: 28px; font-weight: 800; letter-spacing: -1px; }
+.stat-num span { background: linear-gradient(135deg,var(--p),var(--ind)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }
+.stat-lbl { font-size: 11px; color: var(--txt3); font-family: 'DM Mono', monospace; margin-top: 4px; letter-spacing: 0.5px; text-transform: uppercase; }
+
+@keyframes reveal {
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ═══════════════════════════════════════
+   DEMO MOCKUP
+═══════════════════════════════════════ */
+.demo-section {
+  padding: 100px 24px;
+  display: flex; flex-direction: column; align-items: center;
+}
+
+.section-label {
+  font-family: 'DM Mono', monospace;
+  font-size: 10.5px; letter-spacing: 1.5px; text-transform: uppercase;
+  color: var(--p); margin-bottom: 16px;
+  opacity: 0; transform: translateY(15px);
+  transition: opacity 0.6s, transform 0.6s;
+}
+.section-label.visible { opacity: 1; transform: translateY(0); }
+
+.section-title {
+  font-size: clamp(32px, 5vw, 56px); font-weight: 800;
+  letter-spacing: -2px; line-height: 1.05;
+  text-align: center; margin-bottom: 16px;
+  max-width: 700px;
+  opacity: 0; transform: translateY(20px);
+  transition: opacity 0.7s 0.1s, transform 0.7s 0.1s;
+}
+.section-title.visible { opacity: 1; transform: translateY(0); }
+
+.section-sub {
+  font-size: 16px; color: var(--txt2); text-align: center;
+  max-width: 480px; line-height: 1.65; margin-bottom: 64px;
+  font-family: 'DM Mono', monospace; font-style: italic;
+  opacity: 0; transform: translateY(15px);
+  transition: opacity 0.6s 0.2s, transform 0.6s 0.2s;
+}
+.section-sub.visible { opacity: 1; transform: translateY(0); }
+
+/* Browser chrome mockup */
+.browser-frame {
+  width: 100%; max-width: 960px;
+  background: rgba(10,8,20,0.9);
+  border: 1px solid var(--bdr2);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 40px 100px rgba(0,0,0,0.7), 0 0 0 1px rgba(167,139,250,0.05);
+  opacity: 0; transform: translateY(40px) scale(0.97);
+  transition: opacity 0.9s 0.2s, transform 0.9s 0.2s cubic-bezier(0.23,1,0.32,1);
+  position: relative;
+}
+.browser-frame.visible { opacity: 1; transform: translateY(0) scale(1); }
+/* Purple glow behind the frame */
+.browser-frame::before {
+  content: '';
+  position: absolute; inset: -60px;
+  background: radial-gradient(ellipse, rgba(109,40,217,0.18) 0%, transparent 70%);
+  pointer-events: none; z-index: -1;
+}
+
+.browser-bar {
+  padding: 12px 16px;
+  background: rgba(255,255,255,0.03);
+  border-bottom: 1px solid var(--bdr);
+  display: flex; align-items: center; gap: 12px;
+}
+.browser-dots { display: flex; gap: 6px; }
+.browser-dot { width: 10px; height: 10px; border-radius: 50%; }
+.browser-dot:nth-child(1) { background: #ff5f57; }
+.browser-dot:nth-child(2) { background: #febc2e; }
+.browser-dot:nth-child(3) { background: #28c840; }
+.browser-url {
+  flex: 1; padding: 5px 12px; border-radius: 6px;
+  background: rgba(255,255,255,0.04); border: 1px solid var(--bdr);
+  font-family: 'DM Mono', monospace; font-size: 11px; color: var(--txt3);
+  display: flex; align-items: center; gap: 6px;
+}
+.browser-url-lock { color: var(--grn); font-size: 9px; }
+
+/* Extension popup inside browser */
+.demo-content {
+  display: grid; grid-template-columns: 340px 1fr;
+  min-height: 480px;
+}
+
+/* Left: animated popup UI replica */
+.popup-replica {
+  width: 340px;
+  background: #080610;
+  border-right: 1px solid var(--bdr);
+  padding: 0;
+  position: relative;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+/* Tiny orbs inside popup replica */
+.popup-replica::before {
+  content: '';
+  position: absolute; top: -60px; left: -40px; width: 160px; height: 160px;
+  background: radial-gradient(circle, rgba(109,40,217,0.25) 0%, transparent 70%);
+  filter: blur(30px); pointer-events: none; z-index: 0;
+  animation: orb-float 8s ease-in-out infinite alternate;
+}
+@keyframes orb-float {
+  0%   { transform: translate(0,0); }
+  100% { transform: translate(15px,20px); }
+}
+
+.popup-inner { position: relative; z-index: 1; }
+
+/* Popup header */
+.p-hdr {
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  display: flex; align-items: center; justify-content: space-between;
+  background: linear-gradient(180deg, rgba(109,40,217,0.07) 0%, transparent);
+}
+.p-brand { display: flex; align-items: center; gap: 9px; }
+.p-logo { width: 28px; height: 28px; }
+.p-brand-t { font-size: 12.5px; font-weight: 700; color: #ede9fe; }
+.p-brand-s { font-size: 9.5px; color: rgba(237,233,254,0.3); margin-top: 2px; }
+.p-live-pill {
+  font-size: 8.5px; font-weight: 700; letter-spacing: 0.6px;
+  padding: 2.5px 7px; border-radius: 20px;
+  background: rgba(167,139,250,0.15); border: 1px solid rgba(167,139,250,0.3);
+  color: #a78bfa;
+  animation: pill-glow 2.5s ease-in-out infinite;
+}
+@keyframes pill-glow { 0%,100%{box-shadow:0 0 0 0 rgba(167,139,250,0.3)} 50%{box-shadow:0 0 0 4px rgba(167,139,250,0)} }
+
+/* Power strip */
+.p-power {
+  margin: 10px 12px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(167,139,250,0.28);
+  background: rgba(167,139,250,0.06);
+  display: flex; align-items: center; gap: 10px;
+}
+.p-power-orb {
+  width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0;
+  background: rgba(167,139,250,0.12);
+  border: 1.5px solid rgba(167,139,250,0.5);
+  display: flex; align-items: center; justify-content: center;
+  color: #a78bfa;
+  box-shadow: 0 0 14px rgba(167,139,250,0.2), inset 0 0 8px rgba(167,139,250,0.07);
+  animation: orb-pulse 3s ease-in-out infinite;
+}
+@keyframes orb-pulse { 0%,100%{box-shadow:0 0 14px rgba(167,139,250,0.2)} 50%{box-shadow:0 0 22px rgba(167,139,250,0.4)} }
+.p-power-info { flex: 1; }
+.p-power-title { font-size: 12px; font-weight: 650; color: #ede9fe; }
+.p-power-sub { font-size: 10px; color: #a78bfa; margin-top: 2px; opacity: 0.9; }
+
+/* Waveform bars */
+.p-waveform { display: flex; align-items: center; gap: 2px; }
+.p-wv { width: 2.5px; border-radius: 2px; background: #a78bfa; transform-origin: bottom; }
+.p-wv:nth-child(1){height:5px;animation:wv 1.1s ease-in-out infinite 0.0s}
+.p-wv:nth-child(2){height:11px;animation:wv 1.1s ease-in-out infinite 0.15s}
+.p-wv:nth-child(3){height:7px;animation:wv 1.1s ease-in-out infinite 0.3s}
+.p-wv:nth-child(4){height:13px;animation:wv 1.1s ease-in-out infinite 0.1s}
+.p-wv:nth-child(5){height:6px;animation:wv 1.1s ease-in-out infinite 0.25s}
+@keyframes wv { 0%,100%{transform:scaleY(0.35);opacity:0.4} 50%{transform:scaleY(1);opacity:1} }
+
+/* Tabs */
+.p-tabs {
+  display: flex; gap: 0;
+  margin: 10px 12px 0;
+  background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 10px;
+  padding: 3px;
+}
+.p-tab {
+  flex: 1; padding: 6px 4px; border-radius: 7px;
+  font-size: 10.5px; font-weight: 600; color: rgba(237,233,254,0.25);
+  text-align: center; cursor: pointer; transition: all 0.2s;
+}
+.p-tab.active { background: rgba(167,139,250,0.15); color: #a78bfa; }
+
+/* Device cards */
+.p-devices { padding: 10px 12px 0; }
+.p-sec-lbl {
+  font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;
+  color: rgba(237,233,254,0.22); margin-bottom: 7px;
+}
+.p-dev-card {
+  border-radius: 8px; border: 1px solid rgba(255,255,255,0.06);
+  background: rgba(255,255,255,0.03);
+  padding: 8px 10px; display: flex; align-items: center; gap: 8px;
+  margin-bottom: 5px; position: relative; overflow: hidden;
+  transition: all 0.3s;
+}
+.p-dev-card.sel {
+  border-color: rgba(167,139,250,0.35);
+  background: rgba(167,139,250,0.07);
+}
+.p-dev-card::before {
+  content: ''; position: absolute; left: 0; top: 20%; bottom: 20%;
+  width: 2px; background: #a78bfa; border-radius: 2px;
+  opacity: 0; transition: opacity 0.3s;
+}
+.p-dev-card.sel::before { opacity: 1; }
+.p-dev-ico { font-size: 13px; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 6px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06); }
+.p-dev-card.sel .p-dev-ico { background: rgba(167,139,250,0.1); border-color: rgba(167,139,250,0.22); }
+.p-dev-meta { flex: 1; min-width: 0; }
+.p-dev-name { font-size: 11px; font-weight: 500; color: #ede9fe; }
+.p-dev-sub { font-size: 9.5px; color: rgba(237,233,254,0.28); margin-top: 1px; }
+.p-chk {
+  width: 15px; height: 15px; border-radius: 50%;
+  border: 1.5px solid rgba(255,255,255,0.12); background: transparent;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.25s;
+}
+.p-dev-card.sel .p-chk { background: #a78bfa; border-color: #a78bfa; box-shadow: 0 0 6px rgba(167,139,250,0.4); }
+
+/* Apply button */
+.p-apply {
+  margin: 10px 12px 12px;
+  padding: 10px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #7c3aed, #6d28d9, #5b21b6);
+  color: #ede9fe; font-size: 12px; font-weight: 700;
+  text-align: center; letter-spacing: 0.2px;
+  position: relative; overflow: hidden;
+}
+.p-apply::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: rgba(255,255,255,0.18); border-radius: 8px 8px 0 0; }
+
+/* Right panel — feature showcase */
+.demo-right {
+  padding: 36px 40px;
+  display: flex; flex-direction: column; justify-content: center; gap: 28px;
+}
+.demo-feature {
+  display: flex; gap: 16px; align-items: flex-start;
+  opacity: 0; transform: translateX(20px);
+  transition: opacity 0.6s, transform 0.6s;
+}
+.demo-feature.visible { opacity: 1; transform: translateX(0); }
+.demo-feature-icon {
+  width: 44px; height: 44px; flex-shrink: 0;
+  border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--bdr);
+}
+.demo-feature-text h3 { font-size: 15px; font-weight: 700; margin-bottom: 5px; }
+.demo-feature-text p  { font-size: 13px; color: var(--txt2); line-height: 1.6; font-family: 'DM Mono', monospace; font-style: italic; }
+
+/* ═══════════════════════════════════════
+   FEATURES GRID
+═══════════════════════════════════════ */
+.features-section {
+  padding: 100px 60px;
+  max-width: 1200px; margin: 0 auto;
+}
+
+.features-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--bdr);
+  border: 1px solid var(--bdr);
+  border-radius: 20px; overflow: hidden;
+  margin-top: 64px;
+}
+
+.feature-card {
+  background: var(--bg1);
+  padding: 36px 32px;
+  position: relative; overflow: hidden;
+  transition: background 0.3s;
+}
+.feature-card:hover { background: var(--bg2); }
+.feature-card::before {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(135deg, rgba(167,139,250,0.04) 0%, transparent 60%);
+  opacity: 0; transition: opacity 0.3s;
+}
+.feature-card:hover::before { opacity: 1; }
+
+.feature-card-icon {
+  font-size: 28px; display: block; margin-bottom: 16px;
+}
+.feature-card h3 { font-size: 17px; font-weight: 700; margin-bottom: 10px; }
+.feature-card p  { font-size: 13px; color: var(--txt2); line-height: 1.65; font-family: 'DM Mono', monospace; font-style: italic; }
+
+.feature-card .feature-tag {
+  display: inline-block; margin-top: 16px;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase;
+  padding: 3px 9px; border-radius: 100px;
+  background: rgba(167,139,250,0.1); border: 1px solid rgba(167,139,250,0.2); color: var(--p);
+}
+
+/* Scroll reveal for feature cards */
+.feature-card {
+  opacity: 0; transform: translateY(20px);
+  transition: opacity 0.5s, transform 0.5s, background 0.3s;
+}
+.feature-card.visible { opacity: 1; transform: translateY(0); }
+
+/* ═══════════════════════════════════════
+   EFFECTS SHOWCASE
+═══════════════════════════════════════ */
+.effects-section {
+  padding: 100px 60px;
+  max-width: 1200px; margin: 0 auto;
+}
+
+.effects-grid {
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px;
+  margin-top: 64px;
+}
+.effect-chip {
+  border-radius: 14px; border: 1px solid var(--bdr);
+  background: var(--sur);
+  padding: 20px 14px;
+  text-align: center;
+  cursor: pointer; transition: all 0.25s; position: relative; overflow: hidden;
+  opacity: 0; transform: scale(0.92);
+  transition: opacity 0.5s, transform 0.5s, border-color 0.25s, background 0.25s;
+}
+.effect-chip.visible { opacity: 1; transform: scale(1); }
+.effect-chip::before {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(135deg, rgba(167,139,250,0.08), transparent 60%);
+  opacity: 0; transition: opacity 0.25s;
+}
+.effect-chip:hover { border-color: var(--bdr2); background: var(--sur2); }
+.effect-chip:hover::before { opacity: 1; }
+.effect-chip.active { border-color: var(--bdr2); background: rgba(167,139,250,0.08); }
+.effect-chip.active::before { opacity: 1; }
+.effect-icon { font-size: 24px; display: block; margin-bottom: 8px; }
+.effect-name { font-size: 11.5px; font-weight: 700; color: var(--txt); }
+.effect-desc { font-size: 9.5px; color: var(--txt3); margin-top: 4px; line-height: 1.4; font-family: 'DM Mono', monospace; }
+
+/* ═══════════════════════════════════════
+   INSTALL
+═══════════════════════════════════════ */
+.install-section {
+  padding: 100px 60px;
+  max-width: 900px; margin: 0 auto; text-align: center;
+}
+
+.steps {
+  display: flex; flex-direction: column; gap: 0;
+  margin: 64px auto 0; max-width: 600px;
+  text-align: left;
+}
+.step {
+  display: flex; gap: 20px; align-items: flex-start;
+  padding: 24px 0;
+  border-bottom: 1px solid var(--bdr);
+  position: relative;
+  opacity: 0; transform: translateX(-20px);
+  transition: opacity 0.5s, transform 0.5s;
+}
+.step.visible { opacity: 1; transform: translateX(0); }
+.step:last-child { border-bottom: none; }
+
+.step-num {
+  width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0;
+  background: var(--pg, rgba(167,139,250,0.1)); border: 1px solid var(--bdr2);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700; color: var(--p);
+  font-family: 'DM Mono', monospace;
+}
+.step-body h3 { font-size: 16px; font-weight: 700; margin-bottom: 6px; }
+.step-body p  { font-size: 13px; color: var(--txt2); line-height: 1.6; font-family: 'DM Mono', monospace; font-style: italic; }
+.step-body code {
+  display: inline-block; margin-top: 8px;
+  padding: 5px 12px; border-radius: 6px;
+  background: rgba(255,255,255,0.05); border: 1px solid var(--bdr);
+  font-family: 'DM Mono', monospace; font-size: 12px; color: var(--p);
+}
+
+.install-cta {
+  display: flex; gap: 12px; justify-content: center; margin-top: 52px; flex-wrap: wrap;
+  opacity: 0; transform: translateY(20px);
+  transition: opacity 0.6s, transform 0.6s;
+}
+.install-cta.visible { opacity: 1; transform: translateY(0); }
+
+/* ═══════════════════════════════════════
+   FOOTER
+═══════════════════════════════════════ */
+footer {
+  position: relative; z-index: 1;
+  padding: 60px 60px 40px;
+  border-top: 1px solid var(--bdr);
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 20px;
+}
+.footer-brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: inherit; }
+.footer-brand svg { width: 24px; height: 24px; opacity: 0.6; }
+.footer-brand-text { font-size: 13px; font-weight: 700; opacity: 0.6; }
+
+.footer-links { display: flex; gap: 28px; list-style: none; }
+.footer-links a { font-size: 12px; color: var(--txt3); text-decoration: none; transition: color 0.2s; }
+.footer-links a:hover { color: var(--txt2); }
+
+.footer-copy { font-size: 11px; color: var(--txt3); font-family: 'DM Mono', monospace; }
+
+/* ═══════════════════════════════════════
+   EQ VISUALIZER
+═══════════════════════════════════════ */
+.eq-section-wrap {
+  padding: 100px 60px;
+  max-width: 1200px; margin: 0 auto;
+}
+.eq-demo-wrap {
+  margin-top: 64px;
+  background: var(--bg1);
+  border: 1px solid var(--bdr);
+  border-radius: 20px;
+  overflow: hidden;
+  opacity: 0; transform: translateY(30px);
+  transition: opacity 0.8s, transform 0.8s;
+}
+.eq-demo-wrap.visible { opacity: 1; transform: translateY(0); }
+
+.eq-demo-header {
+  padding: 20px 28px;
+  border-bottom: 1px solid var(--bdr);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.eq-demo-title { font-size: 13px; font-weight: 700; }
+.eq-demo-device { font-size: 11px; font-family: 'DM Mono', monospace; color: var(--txt3); display: flex; align-items: center; gap: 6px; }
+.eq-online-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--grn); box-shadow: 0 0 5px rgba(52,211,153,0.5); animation: blink 2s ease-in-out infinite; }
+
+.eq-canvas-wrap { padding: 24px 28px 12px; }
+canvas#eqCanvas { width: 100%; height: 120px; display: block; }
+
+.eq-sliders {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;
+  padding: 16px 28px 28px;
+}
+.eq-slider-group { display: flex; flex-direction: column; gap: 8px; }
+.eq-slider-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--txt3); font-family: 'DM Mono', monospace; }
+.eq-slider-row { display: flex; align-items: center; gap: 10px; }
+.eq-range {
+  flex: 1; -webkit-appearance: none; height: 3px; border-radius: 3px;
+  background: rgba(255,255,255,0.08); outline: none; cursor: pointer;
+}
+.eq-range.bass::-webkit-slider-thumb { -webkit-appearance:none; width:13px;height:13px;border-radius:50%;background:#f472b6;box-shadow:0 0 6px rgba(244,114,182,0.5); }
+.eq-range.mid::-webkit-slider-thumb  { -webkit-appearance:none; width:13px;height:13px;border-radius:50%;background:#818cf8;box-shadow:0 0 6px rgba(129,140,248,0.5); }
+.eq-range.hi::-webkit-slider-thumb   { -webkit-appearance:none; width:13px;height:13px;border-radius:50%;background:#34d399;box-shadow:0 0 6px rgba(52,211,153,0.5); }
+.eq-val { font-size: 11px; font-family:'DM Mono',monospace; color: var(--txt3); width: 30px; text-align: right; }
+
+/* Util */
+.gradient-text {
+  background: linear-gradient(135deg, var(--p) 0%, var(--ind) 50%, var(--pink) 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+}
+</style>
+</head>
+<body>
+
+<div id="cursor"></div>
+<div id="cursor-ring"></div>
+<div class="mesh"></div>
+
+<!-- NAV -->
+<nav id="nav">
+  <a href="#" class="nav-logo">
+    <svg viewBox="0 0 30 30" fill="none">
+      <path d="M15 2L27 9V21L15 28L3 21V9L15 2Z" fill="rgba(109,40,217,0.2)" stroke="rgba(167,139,250,0.4)" stroke-width="1"/>
+      <circle cx="15" cy="15" r="2.5" fill="rgba(167,139,250,0.9)"/>
+      <path d="M15 9v4M15 17v4" stroke="#a78bfa" stroke-width="1.3" stroke-linecap="round"/>
+      <path d="M9 19C10.5 17 12.5 16 15 15.5" stroke="#a78bfa" stroke-width="1.1" stroke-linecap="round" opacity="0.7"/>
+      <path d="M21 19C19.5 17 17.5 16 15 15.5" stroke="#818cf8" stroke-width="1.1" stroke-linecap="round" opacity="0.7"/>
+      <circle cx="9" cy="19.5" r="1.2" fill="#a78bfa" opacity="0.8"/>
+      <circle cx="21" cy="19.5" r="1.2" fill="#818cf8" opacity="0.8"/>
+    </svg>
+    <span class="nav-logo-text">Dual Audio Mixer</span>
+  </a>
+  <ul class="nav-links">
+    <li><a href="#features">Features</a></li>
+    <li><a href="#effects">Effects</a></li>
+    <li><a href="#install">Install</a></li>
+    <li><a href="README.md">Docs</a></li>
+  </ul>
+  <a href="https://github.com/Stevegates24/Audio-splitter-Extension" class="nav-cta">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 2C6.48 2 2 6.48 2 12c0 4.42 2.87 8.17 6.84 9.49.5.09.68-.22.68-.48v-1.69c-2.78.6-3.37-1.34-3.37-1.34-.46-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.61.07-.61 1 .07 1.53 1.03 1.53 1.03.89 1.52 2.34 1.08 2.91.83.09-.65.35-1.08.63-1.33-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02A9.56 9.56 0 0 1 12 6.8c.85 0 1.71.11 2.51.33 1.91-1.29 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10.01 10.01 0 0 0 22 12c0-5.52-4.48-10-10-10z"/>
+    </svg>
+    View on GitHub
+  </a>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-eyebrow">
+    <span class="hero-eyebrow-dot"></span>
+    Chrome Extension · Chromebook · Free & Open Source
+  </div>
+  <h1>
+    Audio everywhere,
+    <span class="line2">simultaneously.</span>
+  </h1>
+  <p class="hero-sub">
+    Route browser audio to HDMI + 3.5mm at once. With spatial effects, EQ per output, and 8D audio that actually sounds natural.
+  </p>
+  <div class="hero-actions">
+    <a href="#install" class="btn-primary">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+      Install Extension
+    </a>
+    <a href="#demo" class="btn-ghost">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polygon points="10,8 16,12 10,16" fill="currentColor" stroke="none"/></svg>
+      See how it works
+    </a>
+  </div>
+  <div class="hero-stats">
+    <div class="stat"><div class="stat-num"><span>10</span></div><div class="stat-lbl">Audio presets</div></div>
+    <div class="stat"><div class="stat-num"><span>3</span></div><div class="stat-lbl">Band EQ per output</div></div>
+    <div class="stat"><div class="stat-num"><span>∞</span></div><div class="stat-lbl">Output devices</div></div>
+  </div>
+
+  <!-- Waveform canvas -->
+  <div class="hero-waveform">
+    <canvas id="heroWave"></canvas>
+  </div>
+</section>
+
+<!-- DEMO -->
+<section class="demo-section" id="demo">
+  <div class="section-label reveal">/ demo</div>
+  <h2 class="section-title reveal">A mixer that lives <br><span class="gradient-text">in your toolbar.</span></h2>
+  <p class="section-sub reveal">Open the popup and your audio instantly follows your setup — no drivers, no system settings.</p>
+
+  <div class="browser-frame reveal-frame">
+    <div class="browser-bar">
+      <div class="browser-dots">
+        <div class="browser-dot"></div><div class="browser-dot"></div><div class="browser-dot"></div>
+      </div>
+      <div class="browser-url">
+        <span class="browser-url-lock">🔒</span>
+        youtube.com/watch?v=...
+      </div>
+    </div>
+    <div class="demo-content">
+      <!-- Popup replica -->
+      <div class="popup-replica">
+        <div class="popup-inner">
+          <div class="p-hdr">
+            <div class="p-brand">
+              <svg class="p-logo" viewBox="0 0 28 28" fill="none">
+                <path d="M14 2L25 8.5V19.5L14 26L3 19.5V8.5L14 2Z" fill="rgba(109,40,217,0.15)" stroke="rgba(167,139,250,0.3)" stroke-width="1"/>
+                <circle cx="14" cy="14" r="2.5" fill="rgba(167,139,250,0.85)"/>
+                <path d="M14 8.5v3.5M14 16v3.5" stroke="#a78bfa" stroke-width="1.3" stroke-linecap="round"/>
+                <path d="M8.5 18C10 16 12 15 14 14.5" stroke="#a78bfa" stroke-width="1.1" stroke-linecap="round" opacity="0.7"/>
+                <path d="M19.5 18C18 16 16 15 14 14.5" stroke="#818cf8" stroke-width="1.1" stroke-linecap="round" opacity="0.7"/>
+                <circle cx="8.5" cy="18.5" r="1.1" fill="#a78bfa" opacity="0.8"/>
+                <circle cx="19.5" cy="18.5" r="1.1" fill="#818cf8" opacity="0.8"/>
+              </svg>
+              <div>
+                <div class="p-brand-t">Audio Mixer</div>
+                <div class="p-brand-s">Multi-output · EQ · Effects</div>
+              </div>
+            </div>
+            <div class="p-live-pill">LIVE</div>
+          </div>
+
+          <div class="p-power">
+            <div class="p-power-orb">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M12 3v5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+                <path d="M6.7 6.7A8.5 8.5 0 1 0 17.3 6.7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+            </div>
+            <div class="p-power-info">
+              <div class="p-power-title">Dual output</div>
+              <div class="p-power-sub">Live · 2 outputs</div>
+            </div>
+            <div class="p-waveform">
+              <div class="p-wv"></div><div class="p-wv"></div><div class="p-wv"></div><div class="p-wv"></div><div class="p-wv"></div>
+            </div>
+          </div>
+
+          <div class="p-tabs">
+            <div class="p-tab active" id="demoTab1" onclick="switchDemoTab(1)">Outputs</div>
+            <div class="p-tab" id="demoTab2" onclick="switchDemoTab(2)">Mixer</div>
+            <div class="p-tab" id="demoTab3" onclick="switchDemoTab(3)">Effects</div>
+          </div>
+
+          <div id="demoPanel1" class="p-devices">
+            <div class="p-sec-lbl">Audio output devices</div>
+            <div class="p-dev-card sel" id="demoCard1">
+              <div class="p-dev-ico">🖥</div>
+              <div class="p-dev-meta">
+                <div class="p-dev-name">HDMI Output</div>
+                <div class="p-dev-sub">hdmi · ···a3f2b1c9</div>
+              </div>
+              <div class="p-chk">
+                <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1 4L3 6.5L7 1.5" stroke="#0d0014" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </div>
+            </div>
+            <div class="p-dev-card sel" id="demoCard2">
+              <div class="p-dev-ico">🎧</div>
+              <div class="p-dev-meta">
+                <div class="p-dev-name">3.5mm Headphones</div>
+                <div class="p-dev-sub">jack · ···b7e8d2a0</div>
+              </div>
+              <div class="p-chk">
+                <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1 4L3 6.5L7 1.5" stroke="#0d0014" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </div>
+            </div>
+            <div class="p-dev-card">
+              <div class="p-dev-ico">📶</div>
+              <div class="p-dev-meta">
+                <div class="p-dev-name">Bluetooth Speaker</div>
+                <div class="p-dev-sub">bluetooth · ···c2f1e9b5</div>
+              </div>
+              <div class="p-chk"></div>
+            </div>
+          </div>
+
+          <!-- Mixer panel (hidden by default) -->
+          <div id="demoPanel2" class="p-devices" style="display:none">
+            <div class="p-sec-lbl">EQ per device</div>
+            <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:10px 10px 14px;margin-bottom:5px">
+              <div style="display:flex;align-items:center;gap:7px;margin-bottom:10px;font-size:10.5px;font-weight:600;color:#ede9fe">
+                <span>🖥</span> HDMI Output
+                <span style="margin-left:auto;font-size:9px;font-family:'DM Mono',monospace;color:rgba(237,233,254,0.3)">Concert Hall</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <div style="display:grid;grid-template-columns:36px 1fr 26px;gap:6px;align-items:center;font-size:9.5px;color:rgba(237,233,254,0.4)">
+                  <span>Bass</span>
+                  <div style="position:relative;height:12px;display:flex;align-items:center">
+                    <div style="position:absolute;left:0;right:0;height:2px;border-radius:2px;background:rgba(255,255,255,0.08)"></div>
+                    <div style="position:absolute;left:50%;width:25%;height:2px;border-radius:2px;background:linear-gradient(90deg,#ec4899,#f472b6)"></div>
+                  </div>
+                  <span style="text-align:right">+4</span>
+                </div>
+                <div style="display:grid;grid-template-columns:36px 1fr 26px;gap:6px;align-items:center;font-size:9.5px;color:rgba(237,233,254,0.4)">
+                  <span>Mid</span>
+                  <div style="position:relative;height:12px;display:flex;align-items:center">
+                    <div style="position:absolute;left:0;right:0;height:2px;border-radius:2px;background:rgba(255,255,255,0.08)"></div>
+                    <div style="position:absolute;right:50%;width:10%;height:2px;border-radius:2px;background:linear-gradient(90deg,#818cf8,#a78bfa)"></div>
+                  </div>
+                  <span style="text-align:right">-2</span>
+                </div>
+                <div style="display:grid;grid-template-columns:36px 1fr 26px;gap:6px;align-items:center;font-size:9.5px;color:rgba(237,233,254,0.4)">
+                  <span>Treble</span>
+                  <div style="position:relative;height:12px;display:flex;align-items:center">
+                    <div style="position:absolute;left:0;right:0;height:2px;border-radius:2px;background:rgba(255,255,255,0.08)"></div>
+                    <div style="position:absolute;left:50%;width:15%;height:2px;border-radius:2px;background:linear-gradient(90deg,#10b981,#34d399)"></div>
+                  </div>
+                  <span style="text-align:right">+2</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Effects panel (hidden by default) -->
+          <div id="demoPanel3" class="p-devices" style="display:none">
+            <div class="p-sec-lbl">Spatial Presets</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px">
+              <div style="border-radius:7px;border:1px solid rgba(167,139,250,0.35);background:rgba(167,139,250,0.08);padding:9px 10px">
+                <div style="font-size:15px;margin-bottom:4px">🎭</div>
+                <div style="font-size:10.5px;font-weight:600;color:#ede9fe">Concert Hall</div>
+                <div style="font-size:9px;color:rgba(237,233,254,0.3);margin-top:2px">Large reverb bloom</div>
+              </div>
+              <div style="border-radius:7px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.03);padding:9px 10px">
+                <div style="font-size:15px;margin-bottom:4px">🌀</div>
+                <div style="font-size:10.5px;font-weight:600;color:#ede9fe">8D Audio</div>
+                <div style="font-size:9px;color:rgba(237,233,254,0.3);margin-top:2px">Organic spatial pan</div>
+              </div>
+              <div style="border-radius:7px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.03);padding:9px 10px">
+                <div style="font-size:15px;margin-bottom:4px">🏟</div>
+                <div style="font-size:10.5px;font-weight:600;color:#ede9fe">Stadium</div>
+                <div style="font-size:9px;color:rgba(237,233,254,0.3);margin-top:2px">Huge open echo</div>
+              </div>
+              <div style="border-radius:7px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.03);padding:9px 10px">
+                <div style="font-size:15px;margin-bottom:4px">🎧</div>
+                <div style="font-size:10.5px;font-weight:600;color:#ede9fe">Night Club</div>
+                <div style="font-size:9px;color:rgba(237,233,254,0.3);margin-top:2px">Punchy bass + reverb</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="p-apply">✓ Applied — routing to 2 outputs</div>
+        </div>
+      </div>
+
+      <!-- Right feature list -->
+      <div class="demo-right">
+        <div class="demo-feature">
+          <div class="demo-feature-icon">🔀</div>
+          <div class="demo-feature-text">
+            <h3>True simultaneous routing</h3>
+            <p>Audio is duplicated at the Web Audio graph level and sent to each output with a separate AudioContext — not mixed back together.</p>
+          </div>
+        </div>
+        <div class="demo-feature">
+          <div class="demo-feature-icon">🎚</div>
+          <div class="demo-feature-text">
+            <h3>Per-device EQ</h3>
+            <p>3-band parametric EQ on every output independently. Boost bass for the TV, cut highs for the headphones.</p>
+          </div>
+        </div>
+        <div class="demo-feature">
+          <div class="demo-feature-icon">🌀</div>
+          <div class="demo-feature-text">
+            <h3>Natural 8D audio</h3>
+            <p>Four overlapping LFOs at prime-ratio frequencies plus a slow drift wave — the orbit never repeats the same pattern twice.</p>
+          </div>
+        </div>
+        <div class="demo-feature">
+          <div class="demo-feature-icon">⚡</div>
+          <div class="demo-feature-text">
+            <h3>Zero latency updates</h3>
+            <p>EQ and volume changes push live to the audio graph via setTargetAtTime — no dropout, no re-routing.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section class="features-section" id="features">
+  <div style="text-align:center">
+    <div class="section-label reveal">/ features</div>
+    <h2 class="section-title reveal">Everything you'd expect.<br><span class="gradient-text">And more.</span></h2>
+  </div>
+  <div class="features-grid">
+    <div class="feature-card">
+      <span class="feature-card-icon">🔀</span>
+      <h3>Multi-output routing</h3>
+      <p>Send audio to any number of outputs at once — HDMI, 3.5mm, Bluetooth, USB. No limit.</p>
+      <span class="feature-tag">Core</span>
+    </div>
+    <div class="feature-card">
+      <span class="feature-card-icon">🎚</span>
+      <h3>3-Band EQ per device</h3>
+      <p>Bass, Mid, Treble controls with ±15dB range on every output independently. Real-time, no dropout.</p>
+      <span class="feature-tag">Mixer</span>
+    </div>
+    <div class="feature-card">
+      <span class="feature-card-icon">🎭</span>
+      <h3>10 Spatial presets</h3>
+      <p>Concert Hall, Stadium, Cave, Night Club, Vaporwave, 8D Audio, Telephone and more — per output.</p>
+      <span class="feature-tag">Effects</span>
+    </div>
+    <div class="feature-card">
+      <span class="feature-card-icon">🌀</span>
+      <h3>Organic 8D audio</h3>
+      <p>Four prime-ratio LFOs plus a slow drift oscillator. It sounds like a room, not a metronome.</p>
+      <span class="feature-tag">Effects</span>
+    </div>
+    <div class="feature-card">
+      <span class="feature-card-icon">⚡</span>
+      <h3>Instant activation</h3>
+      <p>Fixed Chrome autoplay suspension bug — audio activates on first page click, not on system volume change.</p>
+      <span class="feature-tag">Fixed</span>
+    </div>
+    <div class="feature-card">
+      <span class="feature-card-icon">🧠</span>
+      <h3>Echo deduplication</h3>
+      <p>Detects when "default" resolves to the same physical sink as a named device and skips the duplicate.</p>
+      <span class="feature-tag">Smart</span>
+    </div>
+  </div>
+</section>
+
+<!-- EQ DEMO -->
+<section class="eq-section-wrap">
+  <div style="text-align:center">
+    <div class="section-label reveal">/ interactive eq</div>
+    <h2 class="section-title reveal">Tune every output<br><span class="gradient-text">independently.</span></h2>
+    <p class="section-sub reveal">Move the sliders to see the frequency curve update in real-time.</p>
+  </div>
+  <div class="eq-demo-wrap reveal-eq">
+    <div class="eq-demo-header">
+      <div class="eq-demo-title">Frequency Response</div>
+      <div class="eq-demo-device">
+        <div class="eq-online-dot"></div>
+        HDMI Output — Concert Hall
+      </div>
+    </div>
+    <div class="eq-canvas-wrap">
+      <canvas id="eqCanvas" height="120"></canvas>
+    </div>
+    <div class="eq-sliders">
+      <div class="eq-slider-group">
+        <div class="eq-slider-label">Bass (200 Hz)</div>
+        <div class="eq-slider-row">
+          <input type="range" class="eq-range bass" id="eqBass" min="-15" max="15" value="4">
+          <div class="eq-val" id="eqBassVal">+4</div>
+        </div>
+      </div>
+      <div class="eq-slider-group">
+        <div class="eq-slider-label">Mid (1 kHz)</div>
+        <div class="eq-slider-row">
+          <input type="range" class="eq-range mid" id="eqMid" min="-15" max="15" value="-2">
+          <div class="eq-val" id="eqMidVal">-2</div>
+        </div>
+      </div>
+      <div class="eq-slider-group">
+        <div class="eq-slider-label">Treble (8 kHz)</div>
+        <div class="eq-slider-row">
+          <input type="range" class="eq-range hi" id="eqHi" min="-15" max="15" value="2">
+          <div class="eq-val" id="eqHiVal">+2</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- EFFECTS -->
+<section class="effects-section" id="effects">
+  <div style="text-align:center">
+    <div class="section-label reveal">/ audio effects</div>
+    <h2 class="section-title reveal">Ten presets.<br><span class="gradient-text">One tap.</span></h2>
+    <p class="section-sub reveal">Built from synthetic impulse responses and multi-oscillator DSP chains — all inside the browser.</p>
+  </div>
+  <div class="effects-grid" id="effectsGrid">
+    <div class="effect-chip active" data-id="none">
+      <span class="effect-icon">🔇</span>
+      <div class="effect-name">Flat</div>
+      <div class="effect-desc">No processing</div>
+    </div>
+    <div class="effect-chip" data-id="8d">
+      <span class="effect-icon">🌀</span>
+      <div class="effect-name">8D Audio</div>
+      <div class="effect-desc">Organic spatial pan</div>
+    </div>
+    <div class="effect-chip" data-id="concert">
+      <span class="effect-icon">🎭</span>
+      <div class="effect-name">Concert Hall</div>
+      <div class="effect-desc">3.5s reverb bloom</div>
+    </div>
+    <div class="effect-chip" data-id="stadium">
+      <span class="effect-icon">🏟</span>
+      <div class="effect-name">Stadium</div>
+      <div class="effect-desc">6s open echo</div>
+    </div>
+    <div class="effect-chip" data-id="club">
+      <span class="effect-icon">🎧</span>
+      <div class="effect-name">Night Club</div>
+      <div class="effect-desc">Bass + reverb</div>
+    </div>
+    <div class="effect-chip" data-id="cave">
+      <span class="effect-icon">🪨</span>
+      <div class="effect-name">Cave</div>
+      <div class="effect-desc">Metallic reverb</div>
+    </div>
+    <div class="effect-chip" data-id="bathroom">
+      <span class="effect-icon">🚿</span>
+      <div class="effect-name">Bathroom</div>
+      <div class="effect-desc">Tight reflections</div>
+    </div>
+    <div class="effect-chip" data-id="telephone">
+      <span class="effect-icon">📞</span>
+      <div class="effect-name">Telephone</div>
+      <div class="effect-desc">Filtered + distorted</div>
+    </div>
+    <div class="effect-chip" data-id="bassboost">
+      <span class="effect-icon">🔊</span>
+      <div class="effect-name">Bass Boost</div>
+      <div class="effect-desc">+10dB shelf</div>
+    </div>
+    <div class="effect-chip" data-id="vaporwave">
+      <span class="effect-icon">🌊</span>
+      <div class="effect-name">Vaporwave</div>
+      <div class="effect-desc">Dreamy chorus</div>
+    </div>
+  </div>
+</section>
+
+<!-- INSTALL -->
+<section class="install-section" id="install">
+  <div class="section-label reveal">/ install</div>
+  <h2 class="section-title reveal">Up in 60 seconds.</h2>
+  <p class="section-sub reveal">No Chrome Web Store, no waiting for review. Load it directly from the source.</p>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <h3>Download the extension</h3>
+        <p>Clone the repo or download the ZIP and unzip it to a permanent folder on your Chromebook.</p>
+        <code>git clone https://github.com/you/dual-audio-mixer</code>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <h3>Enable Developer mode</h3>
+        <p>Open Chrome and navigate to the extensions page. Toggle Developer mode in the top-right corner.</p>
+        <code>chrome://extensions</code>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <h3>Load the folder</h3>
+        <p>Click "Load unpacked" and select the extension folder. The icon appears in your toolbar immediately.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <h3>Go to a media tab and apply</h3>
+        <p>Open YouTube or Spotify Web. Click the extension, select your outputs, toggle On, and hit Apply.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="install-cta">
+    <a href="https://github.com" class="btn-primary">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12c0 4.42 2.87 8.17 6.84 9.49.5.09.68-.22.68-.48v-1.69c-2.78.6-3.37-1.34-3.37-1.34-.46-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.61.07-.61 1 .07 1.53 1.03 1.53 1.03.89 1.52 2.34 1.08 2.91.83.09-.65.35-1.08.63-1.33-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02A9.56 9.56 0 0 1 12 6.8c.85 0 1.71.11 2.51.33 1.91-1.29 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10.01 10.01 0 0 0 22 12c0-5.52-4.48-10-10-10z"/></svg>
+      Clone on GitHub
+    </a>
+    <a href="README.md" class="btn-ghost">Read the docs →</a>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <a href="#" class="footer-brand">
+    <svg viewBox="0 0 30 30" fill="none"><path d="M15 2L27 9V21L15 28L3 21V9L15 2Z" fill="rgba(109,40,217,0.2)" stroke="rgba(167,139,250,0.4)" stroke-width="1"/><circle cx="15" cy="15" r="2.5" fill="rgba(167,139,250,0.9)"/></svg>
+    <span class="footer-brand-text">Dual Audio Mixer</span>
+  </a>
+  <ul class="footer-links">
+    <li><a href="#features">Features</a></li>
+    <li><a href="#effects">Effects</a></li>
+    <li><a href="#install">Install</a></li>
+    <li><a href="README.md">README</a></li>
+    <li><a href="https://github.com">GitHub</a></li>
+  </ul>
+  <div class="footer-copy">Built with Web Audio API by Steve Gates</div>
+</footer>
+
+<script>
+// ─── Cursor ───────────────────────────────────────────────────────────────────
+const cursor = document.getElementById('cursor');
+const ring   = document.getElementById('cursor-ring');
+let mx = 0, my = 0, rx = 0, ry = 0;
+document.addEventListener('mousemove', e => { mx = e.clientX; my = e.clientY; });
+function animCursor() {
+  cursor.style.transform = `translate(${mx - 5}px, ${my - 5}px)`;
+  rx += (mx - rx) * 0.12; ry += (my - ry) * 0.12;
+  ring.style.transform = `translate(${rx - 18}px, ${ry - 18}px)`;
+  requestAnimationFrame(animCursor);
+}
+animCursor();
+
+// ─── Nav scroll ───────────────────────────────────────────────────────────────
+const nav = document.getElementById('nav');
+window.addEventListener('scroll', () => nav.classList.toggle('scrolled', window.scrollY > 50));
+
+// ─── Hero waveform ────────────────────────────────────────────────────────────
+const hw = document.getElementById('heroWave');
+const hwCtx = hw.getContext('2d');
+let hwT = 0;
+function resizeHW() { hw.width = hw.offsetWidth * devicePixelRatio; hw.height = hw.offsetHeight * devicePixelRatio; }
+resizeHW(); window.addEventListener('resize', resizeHW);
+function drawHeroWave() {
+  const w = hw.width, h = hw.height;
+  hwCtx.clearRect(0, 0, w, h);
+  const waves = [
+    { amp: 0.35, freq: 0.008, speed: 0.012, color: 'rgba(124,58,237,0.35)', phase: 0 },
+    { amp: 0.28, freq: 0.012, speed: 0.018, color: 'rgba(167,139,250,0.25)', phase: 1.5 },
+    { amp: 0.18, freq: 0.018, speed: 0.025, color: 'rgba(244,114,182,0.18)', phase: 3 },
+    { amp: 0.12, freq: 0.024, speed: 0.032, color: 'rgba(129,140,248,0.15)', phase: 4.5 },
+  ];
+  waves.forEach(wave => {
+    hwCtx.beginPath();
+    for (let x = 0; x <= w; x++) {
+      const y = h/2 + Math.sin(x * wave.freq + hwT * wave.speed + wave.phase) * h * wave.amp
+                     + Math.sin(x * wave.freq * 2.3 + hwT * wave.speed * 1.7 + wave.phase) * h * wave.amp * 0.3;
+      x === 0 ? hwCtx.moveTo(x, y) : hwCtx.lineTo(x, y);
+    }
+    hwCtx.lineTo(w, h); hwCtx.lineTo(0, h); hwCtx.closePath();
+    const grad = hwCtx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, wave.color); grad.addColorStop(1, 'transparent');
+    hwCtx.fillStyle = grad; hwCtx.fill();
+  });
+  hwT++;
+  requestAnimationFrame(drawHeroWave);
+}
+drawHeroWave();
+
+// ─── Scroll reveal ────────────────────────────────────────────────────────────
+const io = new IntersectionObserver(entries => {
+  entries.forEach((e, i) => {
+    if (e.isIntersecting) {
+      e.target.classList.add('visible');
+      // Stagger children of feature grid and effects grid
+      if (e.target.classList.contains('features-grid')) {
+        e.target.querySelectorAll('.feature-card').forEach((c, i) => {
+          setTimeout(() => c.classList.add('visible'), i * 80);
+        });
+      }
+      if (e.target.classList.contains('effects-grid')) {
+        e.target.querySelectorAll('.effect-chip').forEach((c, i) => {
+          setTimeout(() => c.classList.add('visible'), i * 55);
+        });
+      }
+    }
+  });
+}, { threshold: 0.12 });
+
+document.querySelectorAll('.reveal, .reveal-frame, .reveal-eq, .step, .install-cta, .demo-feature, .features-grid, .effects-grid').forEach(el => io.observe(el));
+
+// ─── Demo popup tab switcher ──────────────────────────────────────────────────
+function switchDemoTab(n) {
+  [1,2,3].forEach(i => {
+    document.getElementById('demoTab' + i).classList.toggle('active', i === n);
+    document.getElementById('demoPanel' + i).style.display = i === n ? 'block' : 'none';
+  });
+}
+
+// ─── Effects grid click ───────────────────────────────────────────────────────
+document.querySelectorAll('.effect-chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('.effect-chip').forEach(c => c.classList.remove('active'));
+    chip.classList.add('active');
+  });
+});
+
+// ─── EQ visualizer ───────────────────────────────────────────────────────────
+const eqCanvas = document.getElementById('eqCanvas');
+const eqCtx    = eqCanvas.getContext('2d');
+function resizeEQ() { eqCanvas.width = eqCanvas.offsetWidth * devicePixelRatio; eqCanvas.height = eqCanvas.offsetHeight * devicePixelRatio; drawEQ(); }
+window.addEventListener('resize', resizeEQ);
+
+function getBandResponse(freq, centerHz, gainDb, type) {
+  // Simplified frequency response curve
+  const logFreq   = Math.log10(freq);
+  const logCenter = Math.log10(centerHz);
+  const dist = logFreq - logCenter;
+  if (type === 'lowshelf')  return gainDb * Math.max(0, 1 - Math.max(0, (logFreq - logCenter) * 3));
+  if (type === 'highshelf') return gainDb * Math.max(0, 1 - Math.max(0, (logCenter - logFreq) * 3));
+  // peaking
+  return gainDb * Math.exp(-(dist * dist) / 0.08);
+}
+
+function drawEQ() {
+  const w = eqCanvas.width, h = eqCanvas.height;
+  const bass  = parseInt(document.getElementById('eqBass').value);
+  const mid   = parseInt(document.getElementById('eqMid').value);
+  const hi    = parseInt(document.getElementById('eqHi').value);
+  eqCtx.clearRect(0, 0, w, h);
+
+  // Grid lines
+  eqCtx.strokeStyle = 'rgba(255,255,255,0.05)'; eqCtx.lineWidth = 1;
+  for (let i = 1; i < 4; i++) { eqCtx.beginPath(); eqCtx.moveTo(0, h/4*i); eqCtx.lineTo(w, h/4*i); eqCtx.stroke(); }
+  [100,1000,10000].forEach(f => {
+    const x = Math.log10(f/20) / Math.log10(20000/20) * w;
+    eqCtx.beginPath(); eqCtx.moveTo(x, 0); eqCtx.lineTo(x, h); eqCtx.stroke();
+  });
+
+  // Zero line
+  eqCtx.strokeStyle = 'rgba(255,255,255,0.1)'; eqCtx.lineWidth = 1;
+  eqCtx.beginPath(); eqCtx.moveTo(0, h/2); eqCtx.lineTo(w, h/2); eqCtx.stroke();
+
+  // Frequency curve
+  eqCtx.beginPath();
+  const N = 300;
+  for (let i = 0; i <= N; i++) {
+    const t    = i / N;
+    const freq = 20 * Math.pow(1000, t);
+    const db   = getBandResponse(freq, 200,  bass, 'lowshelf')
+               + getBandResponse(freq, 1000, mid,  'peaking')
+               + getBandResponse(freq, 8000, hi,   'highshelf');
+    const x = t * w;
+    const y = h/2 - (db / 15) * (h/2 - 8);
+    i === 0 ? eqCtx.moveTo(x, y) : eqCtx.lineTo(x, y);
+  }
+  const grad = eqCtx.createLinearGradient(0, 0, w, 0);
+  grad.addColorStop(0,   'rgba(244,114,182,0.9)');
+  grad.addColorStop(0.5, 'rgba(167,139,250,0.9)');
+  grad.addColorStop(1,   'rgba(52,211,153,0.9)');
+  eqCtx.strokeStyle = grad; eqCtx.lineWidth = 2.5 * devicePixelRatio; eqCtx.stroke();
+
+  // Fill under curve
+  eqCtx.lineTo(w, h/2); eqCtx.lineTo(0, h/2); eqCtx.closePath();
+  const fillGrad = eqCtx.createLinearGradient(0, 0, 0, h);
+  fillGrad.addColorStop(0, 'rgba(167,139,250,0.12)'); fillGrad.addColorStop(1, 'transparent');
+  eqCtx.fillStyle = fillGrad; eqCtx.fill();
+}
+
+['eqBass','eqMid','eqHi'].forEach(id => {
+  const el  = document.getElementById(id);
+  const val = document.getElementById(id + 'Val');
+  el.addEventListener('input', () => {
+    const v = parseInt(el.value);
+    val.textContent = (v >= 0 ? '+' : '') + v;
+    drawEQ();
+  });
+});
+setTimeout(() => { resizeEQ(); }, 100);
+</script>
+</body>
+</html>
 
