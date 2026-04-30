@@ -48,7 +48,7 @@ async function persist() {
 }
 
 function deviceDefaults(id) {
-  return perDevice[id] || { volume: 1.0, eq: { bass: 0, mid: 0, treble: 0 }, effect: 'none' };
+  return perDevice[id] || { volume: 1.0, eq: { bass: 0, mid: 0, treble: 0 }, effect: 'none', effectParams: {} };
 }
 function ensureDevice(id) {
   if (!perDevice[id]) perDevice[id] = deviceDefaults(id);
@@ -134,6 +134,8 @@ function toggleDevice(id) {
   syncPowerUI();
   updateApplyBtn();
   persist();
+  // Auto-apply when power is on and outputs change
+  if (enabled) applyToTab();
 }
 
 // ─── Mixer helpers ────────────────────────────────────────────────────────────
@@ -284,14 +286,15 @@ function renderFxDeviceSelect() {
   if (!fxTargetId || !validIds.includes(fxTargetId)) fxTargetId = validIds[0];
   sel.value = fxTargetId;
   updatePresetHighlight();
+  renderEffectParams(fxTargetId || 'default');
 }
 function selectPreset(id) {
-  // fxTargetId is always set (default if nothing selected)
   const tid = fxTargetId || 'default';
   ensureDevice(tid).effect = id;
   fxTargetId = tid;
   updatePresetHighlight();
-  pushLiveParams();
+  renderEffectParams(tid);
+  pushLiveEffect();  // swap effect DSP live, auto-applies if not yet applied
   persist();
 }
 
@@ -300,6 +303,69 @@ function updatePresetHighlight() {
   const current = ensureDevice(tid).effect || 'none';
   document.querySelectorAll('.preset-card').forEach(c => {
     c.classList.toggle('sel', c.dataset.preset === current);
+  });
+}
+
+// Render per-effect parameter controls below the preset grid
+function renderEffectParams(tid) {
+  const wrap = $('fx-params');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  const pd     = ensureDevice(tid);
+  const effect = pd.effect || 'none';
+  const params = pd.effectParams || {};
+
+  const configs = {
+    '8d': [
+      { key: 'speed',  label: 'Speed',  min: 0, max: 1, step: 0.01, def: 0.5,  fmt: v => ['Very slow','Slow','Moderate','Fast','Hyper'][Math.round(v*4)] },
+      { key: 'depth',  label: 'Depth',  min: 0, max: 1, step: 0.01, def: 0.7,  fmt: v => Math.round(v*100)+'%' },
+      { key: 'drift',  label: 'Drift',  min: 0, max: 1, step: 0.01, def: 0.5,  fmt: v => Math.round(v*100)+'%' },
+      { key: 'reverb', label: 'Reverb', min: 0, max: 0.8, step: 0.01, def: 0.35, fmt: v => Math.round(v*100)+'%' },
+      { key: 'lofi',   label: 'Lo-Fi',  min: 0, max: 1, step: 0.01, def: 0.0,  fmt: v => v === 0 ? 'Off' : Math.round(v*100)+'%' },
+    ],
+    'concert':   [{ key:'mix', label:'Reverb mix', min:0, max:0.7, step:0.01, def:0.28, fmt:v=>Math.round(v*100)+'%' }],
+    'stadium':   [{ key:'mix', label:'Reverb mix', min:0, max:0.7, step:0.01, def:0.22, fmt:v=>Math.round(v*100)+'%' }],
+    'cave':      [{ key:'mix', label:'Reverb mix', min:0, max:0.7, step:0.01, def:0.30, fmt:v=>Math.round(v*100)+'%' }],
+    'bathroom':  [{ key:'mix', label:'Reverb mix', min:0, max:0.7, step:0.01, def:0.25, fmt:v=>Math.round(v*100)+'%' }],
+    'club':      [{ key:'mix', label:'Reverb mix', min:0, max:0.7, step:0.01, def:0.25, fmt:v=>Math.round(v*100)+'%' }],
+    'vaporwave': [{ key:'mix', label:'Effect mix', min:0, max:0.7, step:0.01, def:0.30, fmt:v=>Math.round(v*100)+'%' }],
+    'telephone': [{ key:'mix', label:'Effect mix', min:0.2, max:1, step:0.01, def:0.80, fmt:v=>Math.round(v*100)+'%' }],
+    'bassboost': [{ key:'gain',label:'Boost',      min:1,  max:14, step:0.5,  def:7,    fmt:v=>'+'+v.toFixed(1)+' dB' }],
+  };
+
+  const knobs = configs[effect];
+  if (!knobs || !knobs.length) {
+    wrap.innerHTML = '<div style="font-size:11px;color:var(--txt3);text-align:center;padding:10px 0">No parameters for this preset</div>';
+    return;
+  }
+
+  knobs.forEach(k => {
+    const val = params[k.key] ?? k.def;
+    const row = document.createElement('div');
+    row.style.cssText = 'display:grid;grid-template-columns:80px 1fr 44px;align-items:center;gap:10px;margin-bottom:9px';
+    row.innerHTML = `
+      <div style="font-size:10.5px;color:var(--txt2)">${k.label}</div>
+      <div style="position:relative;height:14px;display:flex;align-items:center">
+        <div style="position:absolute;left:0;right:0;height:3px;border-radius:3px;background:rgba(255,255,255,0.08)">
+          <div class="fx-fill" style="height:100%;border-radius:3px;background:linear-gradient(90deg,var(--p2),var(--p));width:${((val-k.min)/(k.max-k.min)*100).toFixed(1)}%"></div>
+        </div>
+        <input type="range" class="slider" min="${k.min}" max="${k.max}" step="${k.step}" value="${val}" style="position:absolute;left:0;right:0;width:100%;-webkit-appearance:none;background:transparent;outline:none;cursor:pointer;height:14px">
+      </div>
+      <div class="fx-val" style="font-size:10px;color:var(--txt3);text-align:right;font-variant-numeric:tabular-nums">${k.fmt(val)}</div>
+    `;
+    const slider = row.querySelector('input');
+    const fill   = row.querySelector('.fx-fill');
+    const valEl  = row.querySelector('.fx-val');
+    slider.addEventListener('input', () => {
+      const v = parseFloat(slider.value);
+      fill.style.width = ((v - k.min)/(k.max - k.min)*100).toFixed(1) + '%';
+      valEl.textContent = k.fmt(v);
+      ensureDevice(tid).effectParams = ensureDevice(tid).effectParams || {};
+      ensureDevice(tid).effectParams[k.key] = v;
+      pushLiveEffect();  // param change also needs a live effect swap
+      persist();
+    });
+    wrap.appendChild(row);
   });
 }
 
@@ -314,16 +380,23 @@ function syncPowerUI() {
   pill.classList.toggle('on', isLive);
 
   if (!enabled)           sub.textContent = 'Off — tap to enable';
-  else if (!appliedTabId) sub.textContent = selected.length >= 2 ? `Ready · ${selected.length} outputs` : 'On — apply to activate';
+  else if (!appliedTabId) sub.textContent = 'Activating…';
   else                    sub.textContent = selected.length >= 2 ? `Live · ${selected.length} outputs` : 'Live · default output';
 }
 
 // ─── Bind events ──────────────────────────────────────────────────────────────
 function bindEvents() {
-  $('power-strip').addEventListener('click', () => {
+  $('power-strip').addEventListener('click', async () => {
     enabled = !enabled;
     syncPowerUI(); updateApplyBtn(); persist();
-    if (!enabled && appliedTabId) { pushConfig(appliedTabId); appliedTabId = null; }
+    if (enabled) {
+      // Auto-apply immediately when power is toggled ON
+      await applyToTab();
+    } else if (appliedTabId) {
+      pushConfig(appliedTabId);
+      appliedTabId = null;
+      syncPowerUI();
+    }
   });
 
   $('apply-btn').addEventListener('click', applyToTab);
@@ -344,6 +417,7 @@ function bindEvents() {
   $('fx-device-select').addEventListener('change', e => {
     fxTargetId = e.target.value;
     updatePresetHighlight();
+    renderEffectParams(fxTargetId || 'default');
   });
 }
 
@@ -364,11 +438,13 @@ async function applyToTab() {
       : 'Applied — start playback to activate');
     syncPowerUI();
 
-    // Flash button
+    // Flash button briefly
     const btn = $('apply-btn');
-    btn.textContent = '✓ Applied';
-    btn.classList.add('ok-flash');
-    setTimeout(() => { updateApplyBtn(); btn.classList.remove('ok-flash'); }, 2000);
+    if (btn) {
+      btn.textContent = '✓ Active';
+      btn.classList.add('ok-flash');
+      setTimeout(() => { updateApplyBtn(); btn.classList.remove('ok-flash'); }, 1500);
+    }
   } catch (e) {
     setStatus('err', 'Failed — try on a YouTube or Spotify tab');
   }
@@ -380,7 +456,7 @@ async function pushConfig(tabId) {
   const entries = mixerEntries();
   const sinks = entries.map(({ realId }) => {
     const pd = ensureDevice(realId);
-    return { deviceId: realId, volume: pd.volume, eq: pd.eq, effect: pd.effect || 'none' };
+    return { deviceId: realId, volume: pd.volume, eq: pd.eq, effect: { id: pd.effect || 'none', params: pd.effectParams || {} } };
   });
   const cfg = { enabled, sinks };
   try {
@@ -391,26 +467,49 @@ async function pushConfig(tabId) {
   }
 }
 
-// Live param update (no teardown, no re-route — just update node values)
+// Live param update (no teardown, no re-route — just update EQ/volume)
 async function pushLiveParams() {
   if (!appliedTabId || !enabled) return;
   const entries = mixerEntries();
   const sinks = entries.map(({ realId }) => {
     const pd = ensureDevice(realId);
-    return { deviceId: realId, volume: pd.volume, eq: pd.eq, effect: pd.effect || 'none' };
+    return { deviceId: realId, volume: pd.volume, eq: pd.eq, effect: { id: pd.effect || 'none', params: pd.effectParams || {} } };
   });
   try {
     await chrome.tabs.sendMessage(appliedTabId, { type: 'UPDATE_PARAMS', sinks });
   } catch (_) {}
 }
 
+// Live effect swap — swaps effect DSP nodes in-place, no teardown, no buffering
+// Works even if not yet applied (will auto-apply to active tab first)
+async function pushLiveEffect() {
+  // If not yet applied, auto-apply first so effects are instant from the start
+  if (!appliedTabId && enabled) {
+    await applyToTab();
+    return; // applyToTab already sends the full config including the effect
+  }
+  if (!appliedTabId || !enabled) return;
+
+  const entries = mixerEntries();
+  const sinks = entries.map(({ realId }) => {
+    const pd = ensureDevice(realId);
+    return { deviceId: realId, volume: pd.volume, eq: pd.eq, effect: { id: pd.effect || 'none', params: pd.effectParams || {} } };
+  });
+  try {
+    await chrome.tabs.sendMessage(appliedTabId, { type: 'SWAP_EFFECT', sinks });
+    // Also sync params
+    await chrome.tabs.sendMessage(appliedTabId, { type: 'UPDATE_PARAMS', sinks });
+  } catch (_) {}
+}
+
 // ─── UI helpers ───────────────────────────────────────────────────────────────
 function updateApplyBtn() {
-  const btn   = $('apply-btn');
-  const ready = enabled && selected.length >= 2;
+  const btn = $('apply-btn');
+  if (!btn) return;
   btn.disabled = !enabled;
-  if (!enabled) btn.textContent = 'Enable first — toggle the power';
-  else          btn.textContent = selected.length >= 2 ? 'Apply to active tab' : 'Apply to active tab (default output)';
+  if (!enabled)         btn.textContent = 'Enable to activate';
+  else if (!appliedTabId) btn.textContent = 'Applying…';
+  else                  btn.textContent = '↻ Re-apply to tab';
 }
 
 function updateSelBadge() {
