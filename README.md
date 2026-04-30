@@ -2,7 +2,7 @@
 
 Play browser audio through **both HDMI and 3.5mm jack simultaneously** on your Chromebook.
 
-[Click Here for Webpage!](https://stevegates24.github.io/Audio-splitter-Extension/)
+[Click Here for Webpage!](https://stevegates24.github.io/Steves-Audio-Mixer/)
 
 ---
 
